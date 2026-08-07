@@ -55,6 +55,31 @@ for i, item in enumerate(results):
             st.session_state["food_search_results"] = []
             st.rerun()
 
+# ---- 常用品項:吃過的東西一鍵帶入,不用每次重打 ----
+all_foods_history = db.get_food_log()
+if all_foods_history:
+    freq: dict[str, dict] = {}
+    for f in all_foods_history:
+        entry = freq.setdefault(f["meal_name"], {"count": 0, "latest": f})
+        entry["count"] += 1
+        if f["id"] > entry["latest"]["id"]:
+            entry["latest"] = f
+    top_items = sorted(freq.items(), key=lambda kv: (-kv[1]["count"], -kv[1]["latest"]["id"]))[:8]
+
+    if top_items:
+        st.markdown("**常用品項(點一下帶入下方表單)**")
+        chip_cols = st.columns(4)
+        for idx, (name, info) in enumerate(top_items):
+            f = info["latest"]
+            with chip_cols[idx % 4]:
+                if st.button(f"{name}\n{f['calories']:.0f}kcal", key=f"quick_food_{idx}", width="stretch"):
+                    st.session_state["food_prefill_name"] = f["meal_name"]
+                    st.session_state["food_prefill_calories"] = f["calories"]
+                    st.session_state["food_prefill_protein"] = f["protein_g"]
+                    st.session_state["food_prefill_carb"] = f["carb_g"]
+                    st.session_state["food_prefill_fat"] = f["fat_g"]
+                    st.rerun()
+
 st.divider()
 
 with st.form("food_form", clear_on_submit=True):
@@ -95,10 +120,10 @@ st.subheader(f"{selected_date.isoformat()} 的紀錄")
 
 if profile:
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("熱量", f"{total_cal:.0f}", f"{total_cal - profile['target_calories']:+.0f} / 目標 {profile['target_calories']:.0f}")
-    c2.metric("蛋白質", f"{total_protein:.0f} g", f"{total_protein - profile['target_protein_g']:+.0f} / 目標 {profile['target_protein_g']:.0f}")
-    c3.metric("碳水", f"{total_carb:.0f} g", f"{total_carb - profile['target_carb_g']:+.0f} / 目標 {profile['target_carb_g']:.0f}")
-    c4.metric("脂肪", f"{total_fat:.0f} g", f"{total_fat - profile['target_fat_g']:+.0f} / 目標 {profile['target_fat_g']:.0f}")
+    c1.metric("熱量", f"{total_cal:.0f}", f"{total_cal - profile['target_calories']:+.0f}→{profile['target_calories']:.0f}")
+    c2.metric("蛋白質", f"{total_protein:.0f} g", f"{total_protein - profile['target_protein_g']:+.0f}→{profile['target_protein_g']:.0f}")
+    c3.metric("碳水", f"{total_carb:.0f} g", f"{total_carb - profile['target_carb_g']:+.0f}→{profile['target_carb_g']:.0f}")
+    c4.metric("脂肪", f"{total_fat:.0f} g", f"{total_fat - profile['target_fat_g']:+.0f}→{profile['target_fat_g']:.0f}")
 
     insights = coach.diet_insight(
         total_cal, profile["target_calories"],

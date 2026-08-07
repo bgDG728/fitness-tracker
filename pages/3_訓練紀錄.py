@@ -37,6 +37,11 @@ if exercise:
             f"{suggestion['reason']}"
         )
         default_weight = suggestion["suggested_weight"]
+        # 建議次數是像 "9-10" 這樣的區間字串,表單預設值用區間下限。
+        try:
+            default_reps = int(str(suggestion["suggested_reps"]).split("-")[0])
+        except (ValueError, IndexError):
+            pass
 
     tips = coach.get_exercise_tips(exercise)
     images = coach.get_exercise_images(exercise)
@@ -51,8 +56,21 @@ if exercise:
                 for tip in tips:
                     st.markdown(f"- {tip}")
 
+today_sets = [s for s in db.get_workout_log(log_date) if s["exercise"] == exercise]
+
+if today_sets:
+    last_set = today_sets[-1]
+    if st.button(
+        f"🔁 重複上一組({last_set['weight_kg']}kg x {last_set['reps']} 下)",
+        width="stretch",
+    ):
+        db.add_workout_set(
+            exercise, last_set["set_number"] + 1, last_set["reps"], last_set["weight_kg"],
+            last_set["note"], log_date=log_date,
+        )
+        st.rerun()
+
 with st.form("workout_form", clear_on_submit=True):
-    today_sets = [s for s in db.get_workout_log(log_date) if s["exercise"] == exercise]
     next_set_number = len(today_sets) + 1
 
     col1, col2, col3 = st.columns(3)
