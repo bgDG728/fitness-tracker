@@ -5,6 +5,7 @@ import streamlit as st
 
 import coach
 import db
+import food_api
 
 db.init_db()
 
@@ -18,18 +19,56 @@ if not profile:
 selected_date = st.date_input("日期", value=date.today())
 log_date = selected_date.isoformat()
 
+# ---- 免費食物資料庫搜尋(Open Food Facts,不需要 API key)----
+st.subheader("🔍 搜尋食物資料庫")
+st.caption("輸入食物名稱自動帶出每 100g 熱量/營養素,不用自己查營養標示(英文品名搜尋結果較齊全)。")
+
+search_col, btn_col = st.columns([4, 1])
+with search_col:
+    query = st.text_input("搜尋食物", label_visibility="collapsed", placeholder="例如:chicken breast、banana、白飯")
+with btn_col:
+    do_search = st.button("搜尋", width="stretch")
+
+if do_search and query:
+    st.session_state["food_search_results"] = food_api.search_food(query)
+
+results = st.session_state.get("food_search_results", [])
+if do_search and query and not results:
+    st.warning("查無資料,試試英文品名,或直接用下方手動輸入。")
+
+for i, item in enumerate(results):
+    with st.container(border=True):
+        cols = st.columns([3, 1, 1])
+        label = item["name"] + (f"({item['brand']})" if item["brand"] else "")
+        cols[0].markdown(
+            f"**{label}**\n\n每 100g:{item['calories_per_100g']} kcal ・ "
+            f"蛋白質 {item['protein_per_100g']}g ・ 碳水 {item['carb_per_100g']}g ・ 脂肪 {item['fat_per_100g']}g"
+        )
+        grams = cols[1].number_input("份量(g)", min_value=1, value=100, step=10, key=f"grams_{i}")
+        if cols[2].button("使用這筆", key=f"use_{i}"):
+            ratio = grams / 100
+            st.session_state["food_prefill_name"] = item["name"]
+            st.session_state["food_prefill_calories"] = round(item["calories_per_100g"] * ratio, 1)
+            st.session_state["food_prefill_protein"] = round(item["protein_per_100g"] * ratio, 1)
+            st.session_state["food_prefill_carb"] = round(item["carb_per_100g"] * ratio, 1)
+            st.session_state["food_prefill_fat"] = round(item["fat_per_100g"] * ratio, 1)
+            st.session_state["food_search_results"] = []
+            st.rerun()
+
+st.divider()
+
 with st.form("food_form", clear_on_submit=True):
     st.subheader("新增一筆")
-    meal_name = st.text_input("品項名稱", placeholder="例如:雞胸肉便當")
+    meal_name = st.text_input("品項名稱", value=st.session_state.get("food_prefill_name", ""), placeholder="例如:雞胸肉便當")
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        calories = st.number_input("熱量 (kcal)", min_value=0.0, step=10.0)
+        calories = st.number_input("熱量 (kcal)", min_value=0.0, value=st.session_state.get("food_prefill_calories", 0.0), step=10.0)
     with col2:
-        protein_g = st.number_input("蛋白質 (g)", min_value=0.0, step=1.0)
+        protein_g = st.number_input("蛋白質 (g)", min_value=0.0, value=st.session_state.get("food_prefill_protein", 0.0), step=1.0)
     with col3:
-        carb_g = st.number_input("碳水 (g)", min_value=0.0, step=1.0)
+        carb_g = st.number_input("碳水 (g)", min_value=0.0, value=st.session_state.get("food_prefill_carb", 0.0), step=1.0)
     with col4:
-        fat_g = st.number_input("脂肪 (g)", min_value=0.0, step=1.0)
+        fat_g = st.number_input("脂肪 (g)", min_value=0.0, value=st.session_state.get("food_prefill_fat", 0.0), step=1.0)
     note = st.text_input("備註(選填)")
 
     submitted = st.form_submit_button("加入紀錄", type="primary")
@@ -39,6 +78,8 @@ if submitted:
         st.error("請填品項名稱。")
     else:
         db.add_food(meal_name, calories, protein_g, carb_g, fat_g, note, log_date=log_date)
+        for k in ["food_prefill_name", "food_prefill_calories", "food_prefill_protein", "food_prefill_carb", "food_prefill_fat"]:
+            st.session_state.pop(k, None)
         st.success(f"已加入:{meal_name}")
         st.rerun()
 
