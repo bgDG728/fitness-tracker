@@ -21,7 +21,10 @@ log_date = selected_date.isoformat()
 
 # ---- 免費食物資料庫搜尋(Open Food Facts,不需要 API key)----
 st.subheader("🔍 搜尋食物資料庫")
-st.caption("輸入食物名稱自動帶出每 100g 熱量/營養素,不用自己查營養標示(英文品名搜尋結果較齊全)。")
+st.caption(
+    "輸入食物名稱自動帶出每 100g 熱量/營養素,不用自己查營養標示(英文品名搜尋結果較齊全)。"
+    "資料庫由使用者協作維護,已過濾掉明顯不合理的數值,但仍建議挑選看起來合理的品項。"
+)
 
 search_col, btn_col = st.columns([4, 1])
 with search_col:

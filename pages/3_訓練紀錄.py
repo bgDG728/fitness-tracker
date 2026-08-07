@@ -19,12 +19,21 @@ existing_exercises = db.get_exercise_names()
 st.subheader("新增一組")
 
 # 動作選擇放在表單外面,選了之後可以馬上顯示教練建議,不用等送出表單。
+# 三種來源:動作目錄(分部位瀏覽,不用先知道動作名稱)、最近使用過、自訂輸入。
+source_options = ["📚 動作目錄"]
 if existing_exercises:
-    exercise = st.selectbox("動作", existing_exercises + ["+ 新增動作..."])
-    if exercise == "+ 新增動作...":
-        exercise = st.text_input("新動作名稱", placeholder="例如:臥推")
+    source_options.append("🕒 最近使用過")
+source_options.append("✏️ 自訂輸入")
+
+source = st.radio("動作來源", source_options, horizontal=True, label_visibility="collapsed")
+
+if source == "📚 動作目錄":
+    body_part = st.selectbox("部位", list(coach.EXERCISE_CATALOG.keys()))
+    exercise = st.selectbox("動作", coach.EXERCISE_CATALOG[body_part])
+elif source == "🕒 最近使用過":
+    exercise = st.selectbox("動作", existing_exercises)
 else:
-    exercise = st.text_input("動作", placeholder="例如:臥推")
+    exercise = st.text_input("動作名稱", placeholder="例如:懸垂划船")
 
 # ---- 教練建議:重量/次數 + 姿勢要點 ----
 default_reps, default_weight = 10, 20.0
