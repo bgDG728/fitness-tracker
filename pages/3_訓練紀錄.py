@@ -39,10 +39,17 @@ if exercise:
         default_weight = suggestion["suggested_weight"]
 
     tips = coach.get_exercise_tips(exercise)
-    if tips:
-        with st.expander(f"🧑‍🏫 {exercise} 姿勢要點"):
-            for tip in tips:
-                st.markdown(f"- {tip}")
+    images = coach.get_exercise_images(exercise)
+    if tips or images:
+        with st.expander(f"🧑‍🏫 {exercise} 姿勢要點與示範", expanded=False):
+            if images:
+                img_cols = st.columns(len(images))
+                for col, img_url in zip(img_cols, images):
+                    col.image(img_url, width="stretch")
+                st.caption("圖片來源:free-exercise-db(公共領域,Unlicense)")
+            if tips:
+                for tip in tips:
+                    st.markdown(f"- {tip}")
 
 with st.form("workout_form", clear_on_submit=True):
     today_sets = [s for s in db.get_workout_log(log_date) if s["exercise"] == exercise]

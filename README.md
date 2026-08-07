@@ -75,9 +75,22 @@ venv\Scripts\python.exe -m streamlit run app.py
   Open Food Facts 食物搜尋取代(見上方「食物資料庫搜尋」),沒有金鑰/費用門檻。
 - **動作影片標準化分析**:這是姿態辨識(pose estimation)等級的電腦視覺專案,
   複雜度遠超過目前這個系統,先不做,避免做半套。
-- **動作示範動畫/影片**:目前只做文字化的姿勢要點,沒有嵌入圖片或影片,
-  避免有未經授權使用素材的疑慮。之後如果要加,會先找 MIT/CC 授權的開源動作
-  資料庫(例如 free-exercise-db)確認授權條款,而不是隨便抓圖。
+- ~~動作示範圖片~~:已完成。用 [free-exercise-db](https://github.com/yuhonas/free-exercise-db)
+  (Unlicense/公共領域,可自由使用不需授權/標註)接了常見動作的示範圖片,
+  在「訓練紀錄」頁選動作時跟姿勢要點一起顯示。目前只做靜態圖片(該資料庫本身
+  就是靜態圖不是動畫/影片),中文動作名稱對照表在 `coach.py` 的
+  `EXERCISE_REFERENCE_IMAGES`,只涵蓋常見動作,避免亂猜配錯圖。
+
+## 開發踩雷筆記
+
+用 `venv\Scripts\python.exe -m streamlit run app.py` 啟動時,Streamlit 內部
+會另外用系統安裝的 Python(而不是 venv 的 python)產生一個子行程實際 serve
+網頁。這代表:
+- 只關掉/重啟那個 venv 父行程不夠,子行程可能變成孤兒繼續跑舊程式碼
+  (改了程式但網頁行為沒變,通常就是這個原因)
+- 要確認目前是誰在真正 serve 網頁,查 `Get-NetTCPConnection -LocalPort 8502`
+  拿到 PID,再用 `Get-CimInstance Win32_Process -Filter "ProcessId=<PID>"`
+  看完整指令,確認清楚後兩個(父+子)一起關掉再重啟
 
 ## 隱私
 

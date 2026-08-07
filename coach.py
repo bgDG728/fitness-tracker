@@ -93,6 +93,30 @@ def get_exercise_tips(exercise: str) -> list[str] | None:
     return None
 
 
+# 動作示範圖片:free-exercise-db(yuhonas/free-exercise-db),Unlicense(公共領域),
+# 可自由使用不需授權/標註。只挑常見動作做中文對應,避免亂猜配錯圖。
+EXERCISE_IMAGE_BASE = "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/"
+
+EXERCISE_REFERENCE_IMAGES: dict[str, list[str]] = {
+    "深蹲": ["Barbell_Squat/0.jpg", "Barbell_Squat/1.jpg"],
+    "臥推": ["Barbell_Bench_Press_-_Medium_Grip/0.jpg", "Barbell_Bench_Press_-_Medium_Grip/1.jpg"],
+    "硬舉": ["Barbell_Deadlift/0.jpg", "Barbell_Deadlift/1.jpg"],
+    "肩推": ["Standing_Military_Press/0.jpg", "Standing_Military_Press/1.jpg"],
+    "划船": ["Bent_Over_Barbell_Row/0.jpg", "Bent_Over_Barbell_Row/1.jpg"],
+    "二頭彎舉": ["Dumbbell_Bicep_Curl/0.jpg", "Dumbbell_Bicep_Curl/1.jpg"],
+    "側平舉": ["Side_Lateral_Raise/0.jpg", "Side_Lateral_Raise/1.jpg"],
+    "滑輪下拉": ["Wide-Grip_Lat_Pulldown/0.jpg", "Wide-Grip_Lat_Pulldown/1.jpg"],
+    "臀推": ["Barbell_Hip_Thrust/0.jpg", "Barbell_Hip_Thrust/1.jpg"],
+}
+
+
+def get_exercise_images(exercise: str) -> list[str] | None:
+    for key, paths in EXERCISE_REFERENCE_IMAGES.items():
+        if key in exercise or exercise in key:
+            return [EXERCISE_IMAGE_BASE + p for p in paths]
+    return None
+
+
 def diet_insight(total_cal, target_cal, total_protein, target_protein,
                   total_carb, target_carb, total_fat, target_fat) -> list[str]:
     """回傳今天的飲食建議文字列表(可能為空list代表目前狀況良好)。"""
