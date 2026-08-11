@@ -7,7 +7,14 @@
    達成後才加重量、次數退回下限,重新往上練。
 2. EXERCISE_TIPS  常見動作的姿勢要點(文字提示,不涉及任何圖片/影片版權)。
 3. diet_insight()  依今天營養素攝取 vs 目標的落差,給文字建議跟食物方向。
+4. GOAL_ZONES / epley_1rm() / suggest_target_load() / volume_gap_message()
+   依「訓練目標」(最大力量/肌肥大/肌耐力)給科學化的重量區間跟每週組數
+   建議。數據來源見下方 GOAL_ZONES 註解,規則寫死在程式碼裡、不接任何
+   AI/付費 API——這類目標對應的訓練參數已經有運動科學界的共識,寫成規則表
+   就能涵蓋,邏輯透明、免費、你可以自己打開程式碼驗證合不合理。
 """
+
+from datetime import date as _date, timedelta as _timedelta
 
 # 次數目標區間:在這個區間內雙重漸進,超過上限才加重量
 REP_RANGE_LOW = 6
@@ -71,6 +78,89 @@ def suggest_next_set(exercise: str, history_sets: list[dict]) -> dict | None:
                 f"這次同重量,目標多做 1 下,練到 {REP_RANGE_HIGH} 下之後再加重。"
             ),
         }
+
+
+# ---- 目標導向的科學化訓練建議 ----
+#
+# 三種常見訓練目標對應的強度(%1RM)、次數區間、每週組數區間、自覺強度,
+# 數據參考 ACSM 2026 阻力訓練指引、NSCA 訓練建議,以及 Schoenfeld 等人
+# 對訓練量-肌肥大劑量反應關係的統合分析:
+# - 最大力量:80-100% 1RM,1-6下,每個動作每週至少 2-3 組起,RPE 8-10(0-2 RIR)
+# - 肌肥大:60-80% 1RM,6-12下,每週 10-20 組是多數受訓者的有效區間
+#   (5-9 組是有效下限,超過約 25 組沒有額外好處),RPE 7-9(1-3 RIR)
+# - 肌耐力:40-60% 1RM,12下以上,RPE 6-8(2-4 RIR)
+GOAL_ZONES: dict[str, dict] = {
+    "最大力量": {"pct_1rm": (0.80, 1.00), "reps": (1, 6), "weekly_sets": (2, 5), "rpe": "RPE 8-10(0-2 RIR)"},
+    "肌肥大": {"pct_1rm": (0.60, 0.80), "reps": (6, 12), "weekly_sets": (10, 20), "rpe": "RPE 7-9(1-3 RIR)"},
+    "肌耐力": {"pct_1rm": (0.40, 0.60), "reps": (12, 20), "weekly_sets": (10, 20), "rpe": "RPE 6-8(2-4 RIR)"},
+}
+DEFAULT_GOAL = "肌肥大"
+GOALS = list(GOAL_ZONES.keys())
+
+# e1RM 公式在這個次數區間內誤差普遍在 5% 內,超過就不採用來估 1RM,
+# 避免次數太高時嚴重高估(誤差可能到 15-20%)。
+E1RM_MAX_REPS = 12
+
+
+def epley_1rm(weight_kg: float, reps: int) -> float:
+    """Epley 公式估算單次最大重量(estimated 1RM)。"""
+    return round(weight_kg * (1 + reps / 30), 1)
+
+
+def best_e1rm(history_sets: list[dict]) -> dict | None:
+    """
+    從某動作的歷史紀錄中,找出「換算成 e1RM 最高」的那一組,而不是單純
+    「舉起最重的那次」——用 90kg 做 8 下换算下来的實際力量,可能比 100kg
+    只做 1 下更強,單看重量會誤判 PR。
+    """
+    candidates = [s for s in history_sets if s["reps"] <= E1RM_MAX_REPS]
+    if not candidates:
+        return None
+    best_set = max(candidates, key=lambda s: epley_1rm(s["weight_kg"], s["reps"]))
+    return {
+        "e1rm": epley_1rm(best_set["weight_kg"], best_set["reps"]),
+        "weight_kg": best_set["weight_kg"],
+        "reps": best_set["reps"],
+        "log_date": best_set["log_date"],
+    }
+
+
+def suggest_target_load(goal: str, e1rm: float) -> dict:
+    """依訓練目標 + 目前 e1RM,算出這次建議的重量區間跟次數區間。"""
+    zone = GOAL_ZONES.get(goal, GOAL_ZONES[DEFAULT_GOAL])
+    pct_low, pct_high = zone["pct_1rm"]
+    reps_low, reps_high = zone["reps"]
+    weekly_low, weekly_high = zone["weekly_sets"]
+    return {
+        "weight_low": round(e1rm * pct_low, 1),
+        "weight_high": round(e1rm * pct_high, 1),
+        "reps_low": reps_low,
+        "reps_high": reps_high,
+        "rpe": zone["rpe"],
+        "weekly_sets_low": weekly_low,
+        "weekly_sets_high": weekly_high,
+    }
+
+
+def weekly_set_count(history_sets: list[dict], reference_date: "_date | None" = None) -> int:
+    """計算某動作在「過去 7 天(含今天)」總共做了幾組。"""
+    reference_date = reference_date or _date.today()
+    start = reference_date - _timedelta(days=6)
+    return sum(
+        1 for s in history_sets
+        if start <= _date.fromisoformat(s["log_date"]) <= reference_date
+    )
+
+
+def volume_gap_message(goal: str, weekly_sets_done: int) -> str | None:
+    """依目標的建議週組數區間,提示目前這週組數夠不夠、會不會過量。"""
+    zone = GOAL_ZONES.get(goal, GOAL_ZONES[DEFAULT_GOAL])
+    low, high = zone["weekly_sets"]
+    if weekly_sets_done < low:
+        return f"這週目前做了 {weekly_sets_done} 組,{goal}目標建議每週 {low}-{high} 組,還差 {low - weekly_sets_done} 組。"
+    if weekly_sets_done > high:
+        return f"這週已經做了 {weekly_sets_done} 組,超過{goal}目標建議的 {low}-{high} 組上限,注意恢復、別過度訓練。"
+    return None
 
 
 # 動作目錄:依部位分類,「訓練紀錄」頁用這個讓使用者用瀏覽的方式選動作,

@@ -5,6 +5,7 @@ import streamlit as st
 
 import coach
 import db
+import workout_parser
 
 db.init_db()
 
@@ -15,6 +16,61 @@ selected_date = st.date_input("日期", value=date.today())
 log_date = selected_date.isoformat()
 
 existing_exercises = db.get_exercise_names()
+
+with st.expander("⚡ 快速輸入(貼上你的訓練簡記語法)", expanded=False):
+    st.caption(
+        "動作名稱單獨一行;「固定/自由」+『重量*組數』空白分隔;"
+        "組數用小數 .5 代表半組未完成(記 4 下),整數組數每組預設記 8 下;"
+        "沒接續新動作名稱前,空行不會換動作。解析完會先給預覽,可直接改表格,"
+        "按「確認匯入」才會真的寫進紀錄。"
+    )
+    quick_text = st.text_area(
+        "貼上文字", height=150, key="quick_input_text",
+        placeholder="上斜胸推\n固定32*2 36 41*1 45*1.5\n\n自由 10*2 8*2",
+    )
+    if st.button("解析", key="parse_quick_input"):
+        parsed = workout_parser.parse_quick_input(quick_text)
+        if not parsed:
+            st.warning("沒解析出任何資料,檢查一下格式。")
+            st.session_state.pop("quick_parsed_df", None)
+        else:
+            st.session_state["quick_parsed_df"] = pd.DataFrame([
+                {
+                    "動作": p.exercise, "器材": p.equipment, "重量(kg)": p.weight_kg,
+                    "次數": p.reps, "備註": p.note,
+                }
+                for p in parsed
+            ])
+
+    if "quick_parsed_df" in st.session_state:
+        anomaly_count = (st.session_state["quick_parsed_df"]["備註"].astype(str).str.len() > 0).sum()
+        if anomaly_count:
+            st.warning(f"有 {anomaly_count} 筆有備註(可能是半組估算或解析異常),匯入前確認一下重量/次數對不對。")
+        st.write("解析預覽(可直接點兩下修改再匯入):")
+        edited_df = st.data_editor(
+            st.session_state["quick_parsed_df"], key="quick_parsed_editor",
+            width="stretch", hide_index=True, num_rows="dynamic",
+        )
+        if st.button("✅ 確認匯入", type="primary", key="confirm_quick_import"):
+            existing_today = db.get_workout_log(log_date)
+            next_num = {}
+            for s in existing_today:
+                next_num[s["exercise"]] = max(next_num.get(s["exercise"], 0), s["set_number"])
+            imported = 0
+            for _, row in edited_df.iterrows():
+                ex = str(row["動作"]).strip()
+                if not ex:
+                    continue
+                next_num[ex] = next_num.get(ex, 0) + 1
+                db.add_workout_set(
+                    ex, next_num[ex], int(row["次數"]), float(row["重量(kg)"]),
+                    note=str(row["備註"] or ""), equipment=str(row["器材"] or ""),
+                    log_date=log_date,
+                )
+                imported += 1
+            st.success(f"已匯入 {imported} 筆紀錄。")
+            del st.session_state["quick_parsed_df"]
+            st.rerun()
 
 st.subheader("新增一組")
 
@@ -52,6 +108,32 @@ if exercise:
         except (ValueError, IndexError):
             pass
 
+    current_goal = db.get_exercise_goal(exercise) or coach.DEFAULT_GOAL
+    goal = st.selectbox(
+        "🎯 這個動作的訓練目標", coach.GOALS,
+        index=coach.GOALS.index(current_goal), key=f"goal_{exercise}",
+    )
+    if goal != current_goal:
+        db.set_exercise_goal(exercise, goal)
+
+    e1rm_info = coach.best_e1rm(history)
+    if e1rm_info:
+        target = coach.suggest_target_load(goal, e1rm_info["e1rm"])
+        st.info(
+            f"📐 **{goal}目標區間:{target['weight_low']}-{target['weight_high']}kg,"
+            f"{target['reps_low']}-{target['reps_high']} 下,{target['rpe']}**\n\n"
+            f"換算自你目前最佳預估1RM {e1rm_info['e1rm']}kg"
+            f"(來自 {e1rm_info['log_date']}:{e1rm_info['weight_kg']}kg x {e1rm_info['reps']} 下)"
+        )
+        weekly_done = coach.weekly_set_count(history, reference_date=selected_date)
+        gap_msg = coach.volume_gap_message(goal, weekly_done)
+        if gap_msg:
+            st.warning(f"📊 {gap_msg}")
+        else:
+            st.success(f"📊 這週(至所選日期)已做 {weekly_done} 組,在{goal}目標建議的週組數範圍內。")
+    else:
+        st.caption("還沒有 12 下以內的歷史組數可以估算目標區間(次數太高換算1RM誤差太大),先記錄幾組吧。")
+
     tips = coach.get_exercise_tips(exercise)
     images = coach.get_exercise_images(exercise)
     if tips or images:
@@ -75,7 +157,7 @@ if today_sets:
     ):
         db.add_workout_set(
             exercise, last_set["set_number"] + 1, last_set["reps"], last_set["weight_kg"],
-            last_set["note"], log_date=log_date,
+            last_set["note"], equipment=last_set.get("equipment", ""), log_date=log_date,
         )
         st.rerun()
 
@@ -89,6 +171,7 @@ with st.form("workout_form", clear_on_submit=True):
         reps = st.number_input("次數", min_value=1, value=default_reps, step=1)
     with col3:
         weight_kg = st.number_input("重量 (kg)", min_value=0.0, value=float(default_weight), step=2.5)
+    equipment = st.selectbox("器材(選填)", ["", "固定", "自由"])
     note = st.text_input("備註(選填)", placeholder="例如:RPE 8")
 
     submitted = st.form_submit_button("加入紀錄", type="primary")
@@ -97,7 +180,10 @@ if submitted:
     if not exercise:
         st.error("請填動作名稱。")
     else:
-        db.add_workout_set(exercise, int(set_number), int(reps), weight_kg, note, log_date=log_date)
+        db.add_workout_set(
+            exercise, int(set_number), int(reps), weight_kg, note,
+            equipment=equipment, log_date=log_date,
+        )
         st.success(f"已加入:{exercise} 第 {set_number} 組")
         st.rerun()
 
@@ -129,15 +215,30 @@ else:
     st.info("這天還沒有訓練紀錄。")
 
 st.divider()
-st.subheader("各動作歷史最大重量(PR)")
+st.subheader("各動作歷史最佳表現(PR,以預估1RM排序)")
 
 all_sets = db.get_workout_log()
 if all_sets:
-    all_df = pd.DataFrame(all_sets)
-    pr = all_df.loc[all_df.groupby("exercise")["weight_kg"].idxmax()][
-        ["exercise", "weight_kg", "reps", "log_date"]
-    ].sort_values("exercise")
-    pr.columns = ["動作", "最大重量(kg)", "當時次數", "日期"]
-    st.dataframe(pr, width="stretch", hide_index=True)
+    pr_rows = []
+    for ex in sorted({s["exercise"] for s in all_sets}):
+        best = coach.best_e1rm([s for s in all_sets if s["exercise"] == ex])
+        if best:
+            pr_rows.append({
+                "動作": ex,
+                "預估1RM(kg)": best["e1rm"],
+                "來源": f"{best['weight_kg']}kg x {best['reps']}下",
+                "日期": best["log_date"],
+            })
+    if pr_rows:
+        pr_df = pd.DataFrame(pr_rows).sort_values("動作")
+        st.dataframe(pr_df, width="stretch", hide_index=True)
+        st.caption(
+            "預估1RM(e1RM)用 Epley 公式換算,只採用 12 下以內的組數(換算誤差較可控)。"
+            "反映的是「換算下來力量最強的那一組」,不是單純誰扛得最重——"
+            "例如 90kg x8下 換算 e1RM 比 100kg x1下 還高,會被判定才是真正的 PR。"
+            "不同器材(固定/自由)的紀錄視為同一個動作合併計算。"
+        )
+    else:
+        st.info("還沒有 12 下以內的組數可以估算 1RM,先記錄幾組吧。")
 else:
     st.info("還沒有任何訓練紀錄。")
