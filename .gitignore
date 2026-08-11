@@ -2,3 +2,6 @@ venv/
 __pycache__/
 *.pyc
 fitness.db
+tfda_label_embeddings.npz
+.streamlit/secrets.toml
+*_check*.json

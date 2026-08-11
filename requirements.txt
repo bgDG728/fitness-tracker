@@ -1,4 +1,12 @@
 streamlit
+streamlit-cropper
 pandas
 altair
 requests
+libsql
+# CPU-only torch: 預設 PyPI 的 torch 會帶完整 CUDA 函式庫(體積動輒 GB 級),
+# Streamlit Community Cloud 免費方案的建置時間/空間很可能撐不住,CPU 版小很多
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+transformers
+pillow
