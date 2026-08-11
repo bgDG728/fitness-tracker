@@ -3,11 +3,18 @@
 (fitness.db),不需要額外架設資料庫伺服器。
 
 雲端部署(Streamlit Community Cloud)時檔案系統不持久,重新部署/休眠喚醒
-會遺失資料,所以額外支援 Turso(libSQL)embedded replica 模式:本機檔案
-還是 fitness.db,但每次連線會跟遠端 Turso 資料庫同步(讀寫都呼叫
-conn.sync())。有沒有設定 TURSO_DATABASE_URL / TURSO_AUTH_TOKEN(環境變數
-或 .streamlit/secrets.toml)決定要不要啟用這個模式,沒設定就是單純本機
-sqlite3,本機開發不受影響、不用強制每次都連線 Turso。
+會遺失資料,所以額外支援 Turso(libSQL)embedded replica 模式:讀寫都呼叫
+conn.sync() 跟遠端 Turso 資料庫同步。有沒有設定 TURSO_DATABASE_URL /
+TURSO_AUTH_TOKEN(環境變數或 .streamlit/secrets.toml)決定要不要啟用這個
+模式,沒設定就是單純本機 sqlite3(DB_PATH),本機開發不受影響、不用強制
+每次都連線 Turso。
+
+注意:libsql 的 embedded replica 需要自己管理本機檔案的同步中繼資料
+(sync generation/frame number),不能直接拿一個既有的、非 libsql 建立的
+sqlite3 檔案來用(會噴 "db file exists but metadata file does not")。
+所以 Turso 模式用另一個檔名(TURSO_REPLICA_PATH),不會跟純本機模式共用
+同一個檔案。既有 fitness.db 裡的資料要接上 Turso,需要跑一次
+migrate_to_turso.py(見 README「線上使用」)。
 """
 
 import os
@@ -17,6 +24,7 @@ from datetime import date
 from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "fitness.db"
+TURSO_REPLICA_PATH = Path(__file__).parent / "fitness_turso_replica.db"
 
 
 def _turso_config():
@@ -172,7 +180,7 @@ def get_conn():
     if turso:
         import libsql
         url, token = turso
-        raw = libsql.connect(str(DB_PATH), sync_url=url, auth_token=token)
+        raw = libsql.connect(str(TURSO_REPLICA_PATH), sync_url=url, auth_token=token)
         raw.sync()
         conn = _TursoConn(raw)
     else:

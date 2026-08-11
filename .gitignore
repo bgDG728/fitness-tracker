@@ -2,6 +2,8 @@ venv/
 __pycache__/
 *.pyc
 fitness.db
+fitness.db.bak.*
+fitness_turso_replica.db*
 tfda_label_embeddings.npz
 .streamlit/secrets.toml
 *_check*.json
