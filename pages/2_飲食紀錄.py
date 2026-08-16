@@ -193,16 +193,42 @@ with st.form("food_form", clear_on_submit=True):
         fat_g = st.number_input("脂肪 (g)", min_value=0.0, value=st.session_state.get("food_prefill_fat", 0.0), step=1.0)
     note = st.text_input("備註(選填)")
 
-    submitted = st.form_submit_button("加入紀錄", type="primary")
+    st.caption(
+        "上面填的營養素如果不是每 100g 的量(例如直接抄營養標示上「每份 240ml」"
+        "或「每匙 30g」的數字),請在下面填這份數值實際對應的克數——存入食物"
+        "資料庫時會自動除以這個克數、換算成每 100g,下次搜尋才不會抓錯份量。"
+        "不確定的話留 100 即可。"
+    )
+    base_grams = st.number_input(
+        "上面數值對應的克數", min_value=1.0, value=100.0, step=10.0,
+    )
 
-if submitted:
+    btn_col1, btn_col2 = st.columns(2)
+    with btn_col1:
+        submitted = st.form_submit_button("加入紀錄", type="primary")
+    with btn_col2:
+        submitted_and_saved = st.form_submit_button("加入紀錄 + 存入食物資料庫")
+
+if submitted or submitted_and_saved:
     if not meal_name:
         st.error("請填品項名稱。")
     else:
         db.add_food(meal_name, calories, protein_g, carb_g, fat_g, note, meal_type=meal_type, log_date=log_date)
+        msg = f"已加入:{meal_name}"
+        if submitted_and_saved:
+            ratio = 100 / base_grams
+            db.upsert_tfda_food(
+                f"manual_{meal_name}", "自訂", meal_name,
+                round(calories * ratio, 2),
+                round(protein_g * ratio, 2),
+                round(carb_g * ratio, 2),
+                round(fat_g * ratio, 2),
+                source="manual",
+            )
+            msg += "(已同步存入食物資料庫,下次可直接搜尋帶入)"
         for k in ["food_prefill_name", "food_prefill_calories", "food_prefill_protein", "food_prefill_carb", "food_prefill_fat"]:
             st.session_state.pop(k, None)
-        st.success(f"已加入:{meal_name}")
+        st.success(msg)
         st.rerun()
 
 st.divider()
