@@ -89,14 +89,21 @@ class _TursoConn:
 
     def __init__(self, conn):
         self._conn = conn
+        # 記錄這條連線上執行過的每一句 SQL,供 get_conn() 在 commit 時遇到
+        # Hrana stream 失效(ValueError)要重開連線重放時使用。
+        self.replay_log = []
 
     def execute(self, sql, params=()):
+        self.replay_log.append(("execute", sql, params))
         return _DictCursor(self._conn.execute(sql, params))
 
     def executemany(self, sql, seq):
+        seq = list(seq)
+        self.replay_log.append(("executemany", sql, seq))
         return self._conn.executemany(sql, seq)
 
     def executescript(self, script):
+        self.replay_log.append(("executescript", script, None))
         return self._conn.executescript(script)
 
     def commit(self):
@@ -177,22 +184,48 @@ CREATE INDEX IF NOT EXISTS idx_tfda_foods_name ON tfda_foods(name);
 @contextmanager
 def get_conn():
     turso = _turso_config()
-    if turso:
-        import libsql
-        url, token = turso
-        raw = libsql.connect(str(TURSO_REPLICA_PATH), sync_url=url, auth_token=token)
-        raw.sync()
-        conn = _TursoConn(raw)
-    else:
+    if not turso:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+            conn.commit()
+        finally:
+            conn.close()
+        return
+
+    import libsql
+    url, token = turso
+
+    def _connect():
+        raw = libsql.connect(str(TURSO_REPLICA_PATH), sync_url=url, auth_token=token)
+        raw.sync()
+        return raw, _TursoConn(raw)
+
+    raw, conn = _connect()
     try:
         yield conn
-        conn.commit()
-        if turso:
+        try:
+            conn.commit()
+            raw.sync()
+        except ValueError:
+            # Hrana stream 在 commit 前失效(常見於 Streamlit Cloud 閒置一段
+            # 時間後喚醒:例如 "stream not found" / "stream has expired due
+            # to inactivity"),重開一條新連線、重放同一批已執行的 SQL 再
+            # commit 一次。只重試一次,還是失敗就讓例外往上拋。
+            raw.close()
+            raw, retry_conn = _connect()
+            for kind, sql, params in conn.replay_log:
+                if kind == "execute":
+                    retry_conn.execute(sql, params)
+                elif kind == "executemany":
+                    retry_conn.executemany(sql, params)
+                elif kind == "executescript":
+                    retry_conn.executescript(sql)
+            retry_conn.commit()
             raw.sync()
     finally:
-        conn.close()
+        raw.close()
 
 
 def init_db():
