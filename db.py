@@ -19,12 +19,20 @@ migrate_to_turso.py(見 README「線上使用」)。
 
 import os
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "fitness.db"
 TURSO_REPLICA_PATH = Path(__file__).parent / "fitness_turso_replica.db"
+
+# 讀取前跟 Turso 遠端同步(raw.sync())是一次網路往返,單人使用的情況下
+# 這段時間內資料不會有其他人寫入,不用每個 db 呼叫都重新同步一次——
+# 同一次 Streamlit rerun 常常疊好幾個 db 呼叫,節流後只會付一次往返成本。
+# 寫入後的 sync(把 commit 推上遠端)不受這個節流影響,每次都照跑。
+_TURSO_SYNC_INTERVAL_SECONDS = 5
+_last_synced_at = 0.0
 
 
 def _turso_config():
@@ -195,24 +203,31 @@ def get_conn():
         return
 
     import libsql
+    global _last_synced_at
     url, token = turso
 
-    def _connect():
+    def _connect(allow_throttle=False):
+        global _last_synced_at
         raw = libsql.connect(str(TURSO_REPLICA_PATH), sync_url=url, auth_token=token)
-        raw.sync()
+        now = time.monotonic()
+        if not allow_throttle or (now - _last_synced_at) > _TURSO_SYNC_INTERVAL_SECONDS:
+            raw.sync()
+            _last_synced_at = now
         return raw, _TursoConn(raw)
 
-    raw, conn = _connect()
+    raw, conn = _connect(allow_throttle=True)
     try:
         yield conn
         try:
             conn.commit()
             raw.sync()
+            _last_synced_at = time.monotonic()
         except ValueError:
             # Hrana stream 在 commit 前失效(常見於 Streamlit Cloud 閒置一段
             # 時間後喚醒:例如 "stream not found" / "stream has expired due
-            # to inactivity"),重開一條新連線、重放同一批已執行的 SQL 再
-            # commit 一次。只重試一次,還是失敗就讓例外往上拋。
+            # to inactivity"),重開一條新連線(強制同步,不套用節流)、重放
+            # 同一批已執行的 SQL 再 commit 一次。只重試一次,還是失敗就讓
+            # 例外往上拋。
             raw.close()
             raw, retry_conn = _connect()
             for kind, sql, params in conn.replay_log:
@@ -224,6 +239,7 @@ def get_conn():
                     retry_conn.executescript(sql)
             retry_conn.commit()
             raw.sync()
+            _last_synced_at = time.monotonic()
     finally:
         raw.close()
 

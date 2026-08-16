@@ -10,6 +10,7 @@ from streamlit_cropper import st_cropper
 import coach
 import db
 import food_db
+import food_parser
 import food_vision
 
 db.init_db()
@@ -23,6 +24,100 @@ if not profile:
 
 selected_date = st.date_input("日期", value=date.today())
 log_date = selected_date.isoformat()
+
+
+def _guess_meal_type():
+    """依現在時間猜一個預設餐別,練前/練後餐無法用時間判斷,使用者可自行改選。"""
+    hour = datetime.now().hour
+    if hour < 10:
+        return "早餐"
+    if hour < 15:
+        return "午餐"
+    return "晚餐"
+
+
+# ---- 快速輸入:一次貼上多樣食物,自動比對資料庫、換算份量 ----
+with st.expander("⚡ 快速輸入(一次貼上多樣食物)", expanded=False):
+    st.caption(
+        "一行一項,格式是「克數+品名」,順序、中間空格都可以,例如「300白飯」「75 透抽」。"
+        "解析後會自動比對資料庫抓最接近的品項換算營養素;比對錯誤或查無資料的項目,"
+        "可以在預覽時手動改選候選或選略過,按「確認加入」才會真的寫進紀錄。"
+    )
+    quick_food_text = st.text_area(
+        "貼上文字", height=150, key="quick_food_input_text",
+        placeholder="300白飯\n100菜\n75肉\n75 透抽\n150豆乾",
+    )
+    if st.button("解析", key="parse_quick_food"):
+        parsed_items = food_parser.parse_quick_food_input(quick_food_text)
+        if not parsed_items:
+            st.warning("沒解析出任何資料,檢查一下格式(每行「克數+品名」)。")
+            st.session_state.pop("quick_food_parsed", None)
+        else:
+            st.session_state["quick_food_parsed"] = [
+                {
+                    "輸入": f"{item.grams:.0f}g {item.query}",
+                    "克數": item.grams,
+                    "候選": food_db.search_food(item.query, limit=5),
+                }
+                for item in parsed_items
+            ]
+
+    parsed_rows = st.session_state.get("quick_food_parsed")
+    if parsed_rows:
+        st.write("解析預覽:")
+        for i, row in enumerate(parsed_rows):
+            with st.container(border=True):
+                cols = st.columns([2, 1, 2])
+                cols[0].markdown(f"**{row['輸入']}**")
+                grams = cols[1].number_input(
+                    "克數", min_value=1.0, value=float(row["克數"]), step=10.0,
+                    key=f"quick_food_grams_{i}", label_visibility="collapsed",
+                )
+                options = [c["name"] for c in row["候選"]] + ["（略過)"]
+                choice = cols[2].selectbox(
+                    "比對到的品項", options, index=0,
+                    key=f"quick_food_choice_{i}", label_visibility="collapsed",
+                )
+                row["grams_input"] = grams
+                row["choice"] = choice
+                if choice != "（略過)":
+                    matched = next(c for c in row["候選"] if c["name"] == choice)
+                    ratio = grams / 100
+                    row["matched"] = matched
+                    st.caption(
+                        f"換算:{matched['calories_per_100g'] * ratio:.0f} kcal ・ "
+                        f"蛋白質 {matched['protein_per_100g'] * ratio:.1f}g ・ "
+                        f"碳水 {matched['carb_per_100g'] * ratio:.1f}g ・ "
+                        f"脂肪 {matched['fat_per_100g'] * ratio:.1f}g"
+                    )
+                else:
+                    st.caption("查無資料或選擇略過,確認加入時不會匯入這筆,可到下面表單手動輸入。")
+
+        quick_meal_type = st.selectbox(
+            "這批要記到哪個餐別", db.MEAL_TYPES,
+            index=db.MEAL_TYPES.index(_guess_meal_type()), key="quick_food_meal_type",
+        )
+        if st.button("✅ 確認加入", type="primary", key="confirm_quick_food_import"):
+            imported = 0
+            for row in parsed_rows:
+                if row["choice"] == "（略過)":
+                    continue
+                matched = row["matched"]
+                ratio = row["grams_input"] / 100
+                db.add_food(
+                    matched["name"],
+                    round(matched["calories_per_100g"] * ratio, 1),
+                    round(matched["protein_per_100g"] * ratio, 1),
+                    round(matched["carb_per_100g"] * ratio, 1),
+                    round(matched["fat_per_100g"] * ratio, 1),
+                    meal_type=quick_meal_type, log_date=log_date,
+                )
+                imported += 1
+            st.success(f"已加入 {imported} 筆紀錄。")
+            del st.session_state["quick_food_parsed"]
+            st.rerun()
+
+st.divider()
 
 # ---- 拍照辨識食物(Chinese-CLIP 零樣本分類,本機免費,僅供輔助確認)----
 st.subheader("📷 拍照辨識食物")
@@ -164,16 +259,6 @@ if all_foods_history:
                     st.rerun()
 
 st.divider()
-
-def _guess_meal_type():
-    """依現在時間猜一個預設餐別,練前/練後餐無法用時間判斷,使用者可自行改選。"""
-    hour = datetime.now().hour
-    if hour < 10:
-        return "早餐"
-    if hour < 15:
-        return "午餐"
-    return "晚餐"
-
 
 with st.form("food_form", clear_on_submit=True):
     st.subheader("新增一筆")
